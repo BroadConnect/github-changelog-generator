@@ -4,6 +4,7 @@ require "github_api"
 require "json"
 require "colorize"
 require "benchmark"
+require "uri"
 
 require_relative "github_changelog_generator/parser"
 require_relative "github_changelog_generator/generator"
@@ -62,10 +63,10 @@ module GitHubChangelogGenerator
       end
 
       threads = []
-
-      @issues.each { |issue|
+      @pull_requests.each { |pull_request|
         threads << Thread.new {
-          find_closed_date_by_commit(issue)
+          needle = find_asana_ticket(pull_request)
+          pull_request[:asana] = needle
         }
       }
 
@@ -79,6 +80,12 @@ module GitHubChangelogGenerator
       if @options[:verbose]
         puts "Fetching closed dates for issues: Done!"
       end
+    end
+
+    def find_asana_ticket(pull_request)
+      haystack = "#{pull_request.title} #{pull_request.body}"
+      needle = haystack.scan(/https?:\/\/app.asana.com[\/\d]+/)
+      return needle
     end
 
     def find_closed_date_by_commit(issue)

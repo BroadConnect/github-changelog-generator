@@ -14,7 +14,11 @@ module GitHubChangelogGenerator
     def get_string_for_issue(issue)
       encapsulated_title = encapsulate_string issue[:title]
 
-      title_with_number = "#{encapsulated_title} [\\##{issue[:number]}](#{issue.html_url})"
+      if issue[:asana].length > 0
+        title_with_number = "[#{encapsulated_title}](#{issue[:asana][0]}) [\\##{issue[:number]}](#{issue.html_url})"
+      else
+        title_with_number = "#{encapsulated_title} [\\##{issue[:number]}](#{issue.html_url})"
+      end
 
       unless issue.pull_request.nil?
         if @options[:author]
@@ -25,7 +29,6 @@ module GitHubChangelogGenerator
           end
         end
       end
-      title_with_number
     end
 
     def encapsulate_string(string)
