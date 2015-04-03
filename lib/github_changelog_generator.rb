@@ -1,30 +1,29 @@
 #!/usr/bin/env ruby
 
-require 'github_api'
-require 'json'
-require 'colorize'
-require 'benchmark'
+require "github_api"
+require "json"
+require "colorize"
+require "benchmark"
 
-require_relative 'github_changelog_generator/parser'
-require_relative 'github_changelog_generator/generator'
-require_relative 'github_changelog_generator/version'
+require_relative "github_changelog_generator/parser"
+require_relative "github_changelog_generator/generator"
+require_relative "github_changelog_generator/version"
+require_relative "github_changelog_generator/reader"
 
 module GitHubChangelogGenerator
   class ChangelogGenerator
-
     attr_accessor :options, :all_tags, :github
 
     PER_PAGE_NUMBER = 30
-    GH_RATE_LIMIT_EXCEEDED_MSG = 'Warning: GitHub API rate limit exceed (5000 per hour), change log may not ' +
-      'contain some issues. You can limit the number of issues fetched using the `--max-issues NUM` argument'
+    GH_RATE_LIMIT_EXCEEDED_MSG = "Warning: GitHub API rate limit (5000 per hour) exceeded, change log may be " \
+        "missing some issues. You can limit the number of issues fetched using the `--max-issues NUM` argument."
 
     def initialize
-
       @options = Parser.parse_options
 
       fetch_github_token
 
-      github_options = {per_page: PER_PAGE_NUMBER}
+      github_options = { per_page: PER_PAGE_NUMBER }
       github_options[:oauth_token] = @github_token unless @github_token.nil?
       github_options[:endpoint] = options[:github_endpoint] unless options[:github_endpoint].nil?
       github_options[:site] = options[:github_endpoint] unless options[:github_site].nil?
@@ -37,17 +36,17 @@ module GitHubChangelogGenerator
 
       @generator = Generator.new(@options)
 
-      @all_tags = self.get_all_tags
-      @issues, @pull_requests = self.fetch_issues_and_pull_requests
+      @all_tags = get_all_tags
+      @issues, @pull_requests = fetch_issues_and_pull_requests
 
       if @options[:pulls]
-        @pull_requests = self.get_filtered_pull_requests
+        @pull_requests = get_filtered_pull_requests
       else
         @pull_requests = []
       end
 
       if @options[:issues]
-        @issues = self.get_filtered_issues
+        @issues = get_filtered_issues
       else
         @issues = []
       end
@@ -58,7 +57,6 @@ module GitHubChangelogGenerator
     end
 
     def detect_actual_closed_dates
-
       if @options[:verbose]
         print "Fetching closed dates for issues...\r"
       end
@@ -76,32 +74,28 @@ module GitHubChangelogGenerator
           find_closed_date_by_commit(pull_request)
         }
       }
-      threads.each { |thr| thr.join }
+      threads.each(&:join)
 
       if @options[:verbose]
-        puts 'Fetching closed dates for issues: Done!'
+        puts "Fetching closed dates for issues: Done!"
       end
     end
 
     def find_closed_date_by_commit(issue)
-      unless issue['events'].nil?
-        #if it's PR -> then find "merged event", in case of usual issue -> fond closed date
-        compare_string = issue[:merged_at].nil? ? 'closed' : 'merged'
+      unless issue["events"].nil?
+        # if it's PR -> then find "merged event", in case of usual issue -> fond closed date
+        compare_string = issue[:merged_at].nil? ? "closed" : "merged"
         # reverse! - to find latest closed event. (event goes in date order)
-        issue['events'].reverse!.each { |event|
+        issue["events"].reverse!.each { |event|
           if event[:event].eql? compare_string
             if event[:commit_id].nil?
               issue[:actual_date] = issue[:closed_at]
             else
               begin
-                begin
-                  commit = @github.git_data.commits.get @options[:user], @options[:project], event[:commit_id]
-                rescue
-                  puts GH_RATE_LIMIT_EXCEEDED_MSG.yellow
-                end
+                commit = @github.git_data.commits.get @options[:user], @options[:project], event[:commit_id]
                 issue[:actual_date] = commit[:author][:date]
               rescue
-                puts "Warning: can't fetch commit #{event[:commit_id]} probably it referenced from another repo."
+                puts "Warning: Can't fetch commit #{event[:commit_id]}. It is probably referenced from another repo.".yellow
                 issue[:actual_date] = issue[:closed_at]
               end
             end
@@ -109,7 +103,7 @@ module GitHubChangelogGenerator
           end
         }
       end
-      #TODO: assert issues, that remain without 'actual_date' hash for some reason.
+      # TODO: assert issues, that remain without 'actual_date' hash for some reason.
     end
 
     def print_json(json)
@@ -122,7 +116,7 @@ module GitHubChangelogGenerator
       end
       pull_requests = []
       begin
-        response = @github.pull_requests.list @options[:user], @options[:project], :state => 'closed'
+        response = @github.pull_requests.list @options[:user], @options[:project], state: "closed"
         page_i = 0
         response.each_page do |page|
           page_i += PER_PAGE_NUMBER
@@ -138,45 +132,42 @@ module GitHubChangelogGenerator
 
       @pull_requests.each { |pr|
         fetched_pr = pull_requests.find { |fpr|
-          fpr.number == pr.number }
+          fpr.number == pr.number
+        }
         pr[:merged_at] = fetched_pr[:merged_at]
         pull_requests.delete(fetched_pr)
       }
 
       if @options[:verbose]
-        puts 'Fetching merged dates... Done!'
+        puts "Fetching merged dates: Done!"
       end
-
     end
 
     def get_filtered_pull_requests
+      fetch_merged_at_pull_requests
 
-      self.fetch_merged_at_pull_requests
-
-      filtered_pull_requests = @pull_requests.select {|pr| pr[:merged_at] != nil }
+      filtered_pull_requests = @pull_requests.select { |pr| !pr[:merged_at].nil? }
 
       unless @options[:include_labels].nil?
         filtered_pull_requests = @pull_requests.select { |issue|
-          #add all labels from @options[:incluse_labels] array
-          (issue.labels.map { |label| label.name } & @options[:include_labels]).any?
+          # add all labels from @options[:include_labels] array
+          (issue.labels.map(&:name) & @options[:include_labels]).any?
         }
       end
 
       unless @options[:exclude_labels].nil?
         filtered_pull_requests = filtered_pull_requests.select { |issue|
-          #delete all labels from @options[:exclude_labels] array
-          !(issue.labels.map { |label| label.name } & @options[:exclude_labels]).any?
+          # delete all labels from @options[:exclude_labels] array
+          !(issue.labels.map(&:name) & @options[:exclude_labels]).any?
         }
       end
 
       if @options[:add_issues_wo_labels]
-        issues_wo_labels = @pull_requests.select {
-          # add issues without any labels
-            |issue| !issue.labels.map { |label| label.name }.any?
+        issues_wo_labels = @pull_requests.select { |issue|
+          !issue.labels.map(&:name).any?
         }
         filtered_pull_requests |= issues_wo_labels
       end
-
 
       if @options[:verbose]
         puts "Filtered pull requests: #{filtered_pull_requests.count}"
@@ -185,17 +176,16 @@ module GitHubChangelogGenerator
       filtered_pull_requests
     end
 
-    def compund_changelog
-
+    def compound_changelog
       log = "# Change Log\n\n"
 
       if @options[:unreleased_only]
-        log += self.generate_log_between_tags(self.all_tags[0], nil)
+        log += generate_log_between_tags(all_tags[0], nil)
       elsif @options[:tag1] and @options[:tag2]
         tag1 = @options[:tag1]
         tag2 = @options[:tag2]
         tags_strings = []
-        self.all_tags.each { |x| tags_strings.push(x['name']) }
+        all_tags.each { |x| tags_strings.push(x["name"]) }
 
         if tags_strings.include?(tag1)
           if tags_strings.include?(tag2)
@@ -203,7 +193,7 @@ module GitHubChangelogGenerator
             hash = Hash[to_a]
             index1 = hash[tag1]
             index2 = hash[tag2]
-            log += self.generate_log_between_tags(self.all_tags[index1], self.all_tags[index2])
+            log += generate_log_between_tags(all_tags[index1], all_tags[index2])
           else
             puts "Can't find tag #{tag2} -> exit"
             exit
@@ -213,47 +203,44 @@ module GitHubChangelogGenerator
           exit
         end
       else
-        log += self.generate_log_for_all_tags
+        log += generate_log_for_all_tags
       end
 
       log += "\n\n\\* *This Change Log was automatically generated by [github_changelog_generator](https://github.com/skywinder/Github-Changelog-Generator)*"
 
       output_filename = "#{@options[:output]}"
-      File.open(output_filename, 'w') { |file| file.write(log) }
-      puts 'Done!'
+      File.open(output_filename, "w") { |file| file.write(log) }
+      puts "Done!"
       puts "Generated log placed in #{`pwd`.strip!}/#{output_filename}"
-
     end
 
     def generate_log_for_all_tags
-
       fetch_tags_dates
 
       if @options[:verbose]
-        puts "Sorting tags.."
+        puts "Sorting tags..."
       end
 
-      @all_tags.sort_by! { |x| self.get_time_of_tag(x) }.reverse!
+      @all_tags.sort_by! { |x| get_time_of_tag(x) }.reverse!
 
       if @options[:verbose]
-        puts "Generating log.."
+        puts "Generating log..."
       end
 
-
-      log = ''
+      log = ""
 
       if @options[:unreleased] && @all_tags.count != 0
-        unreleased_log = self.generate_log_between_tags(self.all_tags[0], nil)
+        unreleased_log = generate_log_between_tags(all_tags[0], nil)
         if unreleased_log
           log += unreleased_log
         end
       end
 
-      (1 ... self.all_tags.size).each { |index|
-        log += self.generate_log_between_tags(self.all_tags[index], self.all_tags[index-1])
+      (1...all_tags.size).each { |index|
+        log += generate_log_between_tags(all_tags[index], all_tags[index - 1])
       }
       if @all_tags.count != 0
-        log += generate_log_between_tags(nil, self.all_tags.last)
+        log += generate_log_between_tags(nil, all_tags.last)
       end
 
       log
@@ -261,7 +248,7 @@ module GitHubChangelogGenerator
 
     def fetch_tags_dates
       if @options[:verbose]
-        print "Fetching tags dates..\r"
+        print "Fetching tag dates...\r"
       end
 
       # Async fetching tags:
@@ -271,32 +258,24 @@ module GitHubChangelogGenerator
       @all_tags.each { |tag|
         # explicit set @tag_times_hash to write data safety.
         threads << Thread.new {
-          self.get_time_of_tag(tag, @tag_times_hash)
+          get_time_of_tag(tag, @tag_times_hash)
           if @options[:verbose]
-            print "Fetching tags dates: #{i+1}/#{all}\r"
-            i+=1
+            print "Fetching tags dates: #{i + 1}/#{all}\r"
+            i += 1
           end
-
         }
       }
 
       print "                                 \r"
 
-      threads.each { |thr| thr.join }
+      threads.each(&:join)
 
       if @options[:verbose]
-        puts 'Fetching tags: Done!'
+        puts "Fetching tags dates: #{i} Done!"
       end
     end
 
-    def is_megred(number)
-      @github.pull_requests.merged? @options[:user], @options[:project], number
-    rescue
-      puts GH_RATE_LIMIT_EXCEEDED_MSG.yellow
-    end
-
     def get_all_tags
-
       if @options[:verbose]
         print "Fetching tags...\r"
       end
@@ -313,9 +292,13 @@ module GitHubChangelogGenerator
           tags.concat(page)
         end
         print "                               \r"
-        if @options[:verbose]
+
+        if tags.count == 0
+          puts "Warning: Can't find any tags in repo. Make sure, that you push tags to remote repo via 'git push --tags'".yellow
+        elsif @options[:verbose]
           puts "Found #{tags.count} tags"
         end
+
       rescue
         puts GH_RATE_LIMIT_EXCEEDED_MSG.yellow
       end
@@ -324,15 +307,14 @@ module GitHubChangelogGenerator
     end
 
     def fetch_github_token
-      env_var = @options[:token] ? @options[:token] : (ENV.fetch 'CHANGELOG_GITHUB_TOKEN', nil)
+      env_var = @options[:token] ? @options[:token] : (ENV.fetch "CHANGELOG_GITHUB_TOKEN", nil)
 
       unless env_var
         puts "Warning: No token provided (-t option) and variable $CHANGELOG_GITHUB_TOKEN was not found.".yellow
-        puts "This script can make only 50 requests to GitHub API per hour without token!".yellow
+        puts "This script can make only 50 requests per hour to GitHub API without a token!".yellow
       end
 
       @github_token ||= env_var
-
     end
 
     def generate_log_between_tags(older_tag, newer_tag)
@@ -340,21 +322,21 @@ module GitHubChangelogGenerator
       filtered_pull_requests = delete_by_time(@pull_requests, :actual_date, older_tag, newer_tag)
       filtered_issues = delete_by_time(@issues, :actual_date, older_tag, newer_tag)
 
-      newer_tag_name = newer_tag.nil? ? nil : newer_tag['name']
-      older_tag_name = older_tag.nil? ? nil : older_tag['name']
+      newer_tag_name = newer_tag.nil? ? nil : newer_tag["name"]
+      older_tag_name = older_tag.nil? ? nil : older_tag["name"]
 
       if @options[:filter_issues_by_milestone]
-        #delete excess irrelevant issues (according milestones)
+        # delete excess irrelevant issues (according milestones)
         filtered_issues = filter_by_milestone(filtered_issues, newer_tag_name, @issues)
         filtered_pull_requests = filter_by_milestone(filtered_pull_requests, newer_tag_name, @pull_requests)
       end
 
       if filtered_issues.empty? && filtered_pull_requests.empty? && newer_tag.nil?
         # do not generate empty unreleased section
-        return ''
+        return ""
       end
 
-      self.create_log(filtered_pull_requests, filtered_issues, newer_tag, older_tag_name)
+      create_log(filtered_pull_requests, filtered_issues, newer_tag, older_tag_name)
     end
 
     def filter_by_milestone(filtered_issues, newer_tag_name, src_array)
@@ -363,18 +345,18 @@ module GitHubChangelogGenerator
         if issue.milestone.nil?
           true
         else
-          #check, that this milestone in tag list:
+          # check, that this milestone in tag list:
           @all_tags.find { |tag| tag.name == issue.milestone.title }.nil?
         end
       }
       unless newer_tag_name.nil?
 
-        #add missed issues (according milestones)
+        # add missed issues (according milestones)
         issues_to_add = src_array.select { |issue|
           if issue.milestone.nil?
             false
           else
-            #check, that this milestone in tag list:
+            # check, that this milestone in tag list:
             milestone_is_tag = @all_tags.find { |tag|
               tag.name == issue.milestone.title
             }
@@ -393,11 +375,10 @@ module GitHubChangelogGenerator
     end
 
     def delete_by_time(array, hash_key, older_tag = nil, newer_tag = nil)
+      fail "At least one of the tags should be not nil!" if older_tag.nil? && newer_tag.nil?
 
-      raise 'At least one of the tags should be not nil!' if (older_tag.nil? && newer_tag.nil?)
-
-      newer_tag_time = self.get_time_of_tag(newer_tag)
-      older_tag_time = self.get_time_of_tag(older_tag)
+      newer_tag_time = get_time_of_tag(newer_tag)
+      older_tag_time = get_time_of_tag(older_tag)
 
       array.select { |req|
         if req[hash_key]
@@ -415,7 +396,6 @@ module GitHubChangelogGenerator
             tag_in_range_new = t <= newer_tag_time
           end
 
-
           tag_in_range = (tag_in_range_old) && (tag_in_range_new)
 
           tag_in_range
@@ -425,45 +405,38 @@ module GitHubChangelogGenerator
       }
     end
 
-    # @param [Array] pull_requests
-    # @param [Array] issues
-    # @param [String] older_tag_name
-    # @return [String]
+    # Generates log for section with header and body
+    #
+    # @param [Array] pull_requests List or PR's in new section
+    # @param [Array] issues List of issues in new section
+    # @param [String] newer_tag Name of the newer tag. Could be nil for `Unreleased` section
+    # @param [String] older_tag_name Older tag, used for the links. Could be nil for last tag.
+    # @return [String] Ready and parsed section
     def create_log(pull_requests, issues, newer_tag, older_tag_name = nil)
+      newer_tag_time = newer_tag.nil? ? Time.new                    : get_time_of_tag(newer_tag)
+      newer_tag_name = newer_tag.nil? ? @options[:unreleased_label] : newer_tag["name"]
+      newer_tag_link = newer_tag.nil? ? "HEAD"                      : newer_tag_name
 
-      newer_tag_time = newer_tag.nil? ? nil : self.get_time_of_tag(newer_tag)
-      newer_tag_name = newer_tag.nil? ? nil : newer_tag['name']
-
-      github_site = options[:github_site] || 'https://github.com'
+      github_site = options[:github_site] || "https://github.com"
       project_url = "#{github_site}/#{@options[:user]}/#{@options[:project]}"
 
-      if newer_tag.nil?
-        newer_tag_name = @options[:unreleased_label]
-        newer_tag_link = 'HEAD'
-        newer_tag_time = Time.new
-      else
-        newer_tag_link = newer_tag_name
-      end
-
-      log = ''
-
-      log += generate_header(log, newer_tag_name, newer_tag_link, newer_tag_time, older_tag_name, project_url)
+      log = generate_header(newer_tag_name, newer_tag_link, newer_tag_time, older_tag_name, project_url)
 
       if @options[:issues]
         # Generate issues:
         issues_a = []
         enhancement_a = []
-        bugs_a =[]
+        bugs_a = []
 
         issues.each { |dict|
           added = false
           dict.labels.each { |label|
-            if label.name == 'bug'
+            if label.name == "bug"
               bugs_a.push dict
               added = true
               next
             end
-            if label.name == 'enhancement'
+            if label.name == "enhancement"
               enhancement_a.push dict
               added = true
               next
@@ -474,22 +447,26 @@ module GitHubChangelogGenerator
           end
         }
 
-        log += generate_log_from_array(enhancement_a, @options[:enhancement_prefix])
-        log += generate_log_from_array(bugs_a, @options[:bug_prefix])
-        log += generate_log_from_array(issues_a, @options[:issue_prefix])
+        log += generate_sub_section(enhancement_a, @options[:enhancement_prefix])
+        log += generate_sub_section(bugs_a, @options[:bug_prefix])
+        log += generate_sub_section(issues_a, @options[:issue_prefix])
       end
 
       if @options[:pulls]
         # Generate pull requests:
-        log += generate_log_from_array(pull_requests, @options[:merge_prefix])
+        log += generate_sub_section(pull_requests, @options[:merge_prefix])
       end
 
       log
     end
 
-    def generate_log_from_array(issues, prefix)
-      log = ''
-      if options[:simple_list].nil? && issues.any?
+    # @param [Array] issues List of issues on sub-section
+    # @param [String] prefix Nae of sub-section
+    # @return [String] Generate ready-to-go sub-section
+    def generate_sub_section(issues, prefix)
+      log = ""
+
+      if options[:simple_list] != true && issues.any?
         log += "#{prefix}\n\n"
       end
 
@@ -502,80 +479,84 @@ module GitHubChangelogGenerator
       log
     end
 
-    def generate_header(log, newer_tag_name, newer_tag_name2, newer_tag_time, older_tag_name, project_url)
+    # It generate one header for section with specific parameters.
+    #
+    # @param [String] newer_tag_name - name of newer tag
+    # @param [String] newer_tag_link - used for links. Could be same as #newer_tag_name or some specific value, like HEAD
+    # @param [Time] newer_tag_time - time, when newer tag created
+    # @param [String] older_tag_link - tag name, used for links.
+    # @param [String] project_url - url for current project.
+    # @return [String] - Generate one ready-to-add section.
+    def generate_header(newer_tag_name, newer_tag_link, newer_tag_time, older_tag_link, project_url)
+      log = ""
 
-      #Generate date string:
-      time_string = newer_tag_time.strftime @options[:format]
+      # Generate date string:
+      time_string = newer_tag_time.strftime @options[:dateformat]
 
       # Generate tag name and link
       if newer_tag_name.equal? @options[:unreleased_label]
-        log += "## [#{newer_tag_name}](#{project_url}/tree/#{newer_tag_name2})\n\n"
+        log += "## [#{newer_tag_name}](#{project_url}/tree/#{newer_tag_link})\n\n"
       else
-        log += "## [#{newer_tag_name}](#{project_url}/tree/#{newer_tag_name2}) (#{time_string})\n\n"
+        log += "## [#{newer_tag_name}](#{project_url}/tree/#{newer_tag_link}) (#{time_string})\n\n"
       end
 
-      if @options[:compare_link] && older_tag_name
+      if @options[:compare_link] && older_tag_link
         # Generate compare link
-        log += "[Full Changelog](#{project_url}/compare/#{older_tag_name}...#{newer_tag_name2})\n\n"
+        log += "[Full Changelog](#{project_url}/compare/#{older_tag_link}...#{newer_tag_link})\n\n"
       end
 
       log
     end
 
     def get_time_of_tag(tag_name, tag_times_hash = @tag_times_hash)
-
       if tag_name.nil?
         return nil
       end
 
-      if tag_times_hash[tag_name['name']]
-        return @tag_times_hash[tag_name['name']]
+      if tag_times_hash[tag_name["name"]]
+        return @tag_times_hash[tag_name["name"]]
       end
 
       begin
-        github_git_data_commits_get = @github.git_data.commits.get @options[:user], @options[:project], tag_name['commit']['sha']
+        github_git_data_commits_get = @github.git_data.commits.get @options[:user], @options[:project], tag_name["commit"]["sha"]
       rescue
         puts GH_RATE_LIMIT_EXCEEDED_MSG.yellow
       end
-      time_string = github_git_data_commits_get['committer']['date']
-      @tag_times_hash[tag_name['name']] = Time.parse(time_string)
+      time_string = github_git_data_commits_get["committer"]["date"]
+      @tag_times_hash[tag_name["name"]] = Time.parse(time_string)
     end
 
     def get_filtered_issues
-
       issues = @issues
 
       filtered_issues = issues
 
       unless @options[:include_labels].nil?
         filtered_issues = issues.select { |issue|
-          #add all labels from @options[:incluse_labels] array
-          (issue.labels.map { |label| label.name } & @options[:include_labels]).any?
+          # add all labels from @options[:include_labels] array
+          (issue.labels.map(&:name) & @options[:include_labels]).any?
         }
       end
 
       unless @options[:exclude_labels].nil?
         filtered_issues = filtered_issues.select { |issue|
-          #delete all labels from @options[:exclude_labels] array
-          !(issue.labels.map { |label| label.name } & @options[:exclude_labels]).any?
+          # delete all labels from @options[:exclude_labels] array
+          !(issue.labels.map(&:name) & @options[:exclude_labels]).any?
         }
       end
 
       if @options[:add_issues_wo_labels]
-        issues_wo_labels = issues.select {
-          # add issues without any labels
-            |issue| !issue.labels.map { |label| label.name }.any?
+        issues_wo_labels = issues.select { |issue|
+          !issue.labels.map(&:name).any?
         }
         filtered_issues |= issues_wo_labels
       end
-
 
       if @options[:verbose]
         puts "Filtered issues: #{filtered_issues.count}"
       end
 
       filtered_issues
-
     end
 
     def fetch_issues_and_pull_requests
@@ -585,7 +566,7 @@ module GitHubChangelogGenerator
       issues = []
 
       begin
-        response = @github.issues.list user: @options[:user], repo: @options[:project], state: 'closed', filter: 'all', labels: nil
+        response = @github.issues.list user: @options[:user], repo: @options[:project], state: "closed", filter: "all", labels: nil
         page_i = 0
         count_pages = response.count_pages
         response.each_page do |page|
@@ -606,12 +587,12 @@ module GitHubChangelogGenerator
 
       # remove pull request from issues:
       issues_wo_pr = issues.select { |x|
-        x.pull_request == nil
+        x.pull_request.nil?
       }
       pull_requests = issues.select { |x|
-        x.pull_request != nil
+        !x.pull_request.nil?
       }
-      return issues_wo_pr, pull_requests
+      [issues_wo_pr, pull_requests]
     end
 
     def fetch_event_for_issues_and_pr
@@ -622,13 +603,6 @@ module GitHubChangelogGenerator
       # Async fetching events:
 
       fetch_events_async(@issues + @pull_requests)
-
-      #to clear line from prev print
-      print "                                                            \r"
-
-      if @options[:verbose]
-        puts 'Fetching events for issues and PR: Done!'
-      end
     end
 
     def fetch_events_async(issues)
@@ -639,24 +613,29 @@ module GitHubChangelogGenerator
         issues_slice.each { |issue|
           threads << Thread.new {
             begin
-              obj = @github.issues.events.list user: @options[:user], repo: @options[:project], issue_number: issue['number']
+              obj = @github.issues.events.list user: @options[:user], repo: @options[:project], issue_number: issue["number"]
             rescue
               puts GH_RATE_LIMIT_EXCEEDED_MSG.yellow
             end
             issue[:events] = obj.body
-            print "Fetching events for issues and PR: #{i+1}/#{@issues.count + @pull_requests.count}\r"
-            i +=1
+            print "Fetching events for issues and PR: #{i + 1}/#{@issues.count + @pull_requests.count}\r"
+            i += 1
           }
         }
-        threads.each { |thr| thr.join }
+        threads.each(&:join)
         threads = []
       }
+
+      # to clear line from prev print
+      print "                                                            \r"
+
+      if @options[:verbose]
+        puts "Fetching events for issues and PR: #{i} Done!"
+      end
     end
-
   end
 
-  if __FILE__ == $0
-    GitHubChangelogGenerator::ChangelogGenerator.new.compund_changelog
+  if __FILE__ == $PROGRAM_NAME
+    GitHubChangelogGenerator::ChangelogGenerator.new.compound_changelog
   end
-
 end
